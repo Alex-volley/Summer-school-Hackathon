@@ -1,0 +1,126 @@
+# Alexandra Koelbl
+#code no. 2
+library(sp)
+library(raster)
+library(caret)
+library(CAST)
+library(partykit)
+library(latticeExtra)
+library(dplyr)
+library(doParallel)
+
+
+
+train_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.train_2000..2020_brazil.eumap_summer.school.2022.csv")
+val_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.val_2000..2020_brazil.eumap_summer.school.2022.csv")
+test_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.test_2000..2020_brazil.eumap_summer.school.2022.csv")
+
+train_val_df <- rbind(train_df, val_df)
+#show the data
+tr <- st_as_sf(train_df, coords = c("latitude", "longitude"))
+val <- st_as_sf(val_df, coords = c("latitude", "longitude"))
+te <- st_as_sf(test_df, coords = c("latitude", "longitude"))
+
+tra <- tm_shape(tr) + tm_dots(col ="X", palette = "red") + tm_layout(legend.show = FALSE )
+vali <- tm_shape(val) + tm_dots(col ="X", palette = "blue") + tm_layout(legend.show = FALSE )
+tes <- tm_shape(te) + tm_dots(col ="X", palette = "green") + tm_layout(legend.show = FALSE )
+
+tra + vali + tes
+
+
+
+#new predictors
+# decided beacause the first 20 VarImp from model of code no. 2 , including longitude, latitude, date, year
+# including the spatial things because overfitting doesn't matter
+#
+predi_2 <- c(
+  "tile_id",
+  "longitude",
+  "latitude",
+  "date", 
+  "year",
+  "clm_bioclim.var_chelsa.bio8_m_1km_s0..0cm_1981..2010" ,                             
+  "lcv_swir1_landsat.glad.tmwm_p50_30m_0..0cm_.09.13...12.01" ,                    
+  "clm_accum.precipitation_chelsa.annual_m_1km_s0..0cm_"   ,                           
+  "clm_lst_mod11a2.daytime.m03_sd_1km_s0..0cm_2000..2021"  ,                           
+  "lcv_green_landsat.glad.tmwm_p25_30m_0..0cm_.12.02...03.20" ,                       
+  "clm_lst_mod11a2.daytime.m10_sd_1km_s0..0cm_2000..2021",                            
+  "lcv_swir1_landsat.glad.tmwm_p50_30m_0..0cm_.06.25...09.12" ,                       
+  "lcv_swir1_landsat.glad.tmwm_p75_30m_0..0cm_.06.25...09.12"  ,                       
+  "lcv_swir1_landsat.glad.tmwm_p25_30m_0..0cm_.06.25...09.12"  ,                       
+  "lcv_nir_landsat.glad.tmwm_p25_30m_0..0cm_.09.13...12.01",                          
+  "veg_evi.mod13q1_stl.trend.logit.ols.beta_m_250m_0..0cm_2000..2020" ,                
+  "clm_accum.precipitation_chelsa.montlhy_m_1km_s0..0cm_.01.01...01.31" ,             
+  "clm_lst_mod11a2.nighttime_p05_1km_s0..0cm_.02.01...02.28"   ,                     
+  "lcv_accessibility.to.cities_map.ox.var9_m_1km_s0..0cm_2015"  ,                      
+  "clm_lst_mod11a2.daytime_p05_1km_s0..0cm_.03.01...03.31"   ,                      
+  "clm_accum.precipitation_chelsa.montlhy_m_1km_s0..0cm_.03.01...03.31"   ,            
+  "clm_lst_mod11a2.daytime.m10_p05_1km_s0..0cm_2000..2021"   ,                         
+  "lcv_swir2_landsat.glad.tmwm_p50_30m_0..0cm_.09.13...12.01" ,                       
+  "clm_lst_mod11a2.daytime.trend.trend.logit.ols.beta_m_1km_s0..0cm_2000..2021",    
+  "lcv_swir2_landsat.glad.tmwm_p75_30m_0..0cm_.09.13...12.01")                      
+
+
+## Train model with spatial cross-validation and 10 folds
+set.seed(123)
+folds <- CreateSpacetimeFolds(train_df,spacevar = "X", k = 10)
+#spatial cross validation
+ctrl_sp <- trainControl(method="cv",
+                        savePredictions = TRUE,
+                        index=folds$index,
+                        indexOut=folds$indexOut)
+                        
+##FFS Model # choose one more time the most influential parameters
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+ffsmodel_spatial <- ffs(train_df[, predi_2],
+                        train_df[,response],
+                        method="rf",
+                        metric="Kappa",
+                        tuneGrid=data.frame("mtry"=model$bestTune$mtry),
+                        trControl = ctrl_sp,
+                        ntree=100)
+ffsmodel_spatial
+stopCluster(cl)
+predi_3 <- ffsmodel_spatial$selectedvars # new predictors for next model
+## 6 predictors :
+#[1] "latitude"                                                           
+#[2] "lcv_swir2_landsat.glad.tmwm_p50_30m_0..0cm_.09.13...12.01"          
+#[3] "clm_bioclim.var_chelsa.bio8_m_1km_s0..0cm_1981..2010"               
+#[4] "clm_accum.precipitation_chelsa.montlhy_m_1km_s0..0cm_.03.01...03.31"
+#[5] "lcv_green_landsat.glad.tmwm_p25_30m_0..0cm_.12.02...03.20"          
+#[6] "lcv_accessibility.to.cities_map.ox.var9_m_1km_s0..0cm_2015"      
+
+##new model based on predi_3 # also with spatial cross validation
+#make it parallel
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+set.seed(100)
+model_spatialCV_2 <- train(train_df[,predi_3],
+                         train_df[,response],
+                         method="rf",
+                         metric="Kappa",
+                         trControl=ctrl_sp, 
+                         tuneGrid=data.frame("mtry"=model$bestTune$mtry), #mtry : 369
+                         importance=TRUE,
+                         ntree=100)
+
+model_spatialCV_2
+#Accuracy   Kappa    
+#  0.8286146  0.6177224
+
+
+#predict testing data
+pls <- predict(model_spatialCV, newdata = test_df)#, type = "prob")
+fr_2 <- tibble(pls)
+
+levels(fr_2$pls) <- recode_factor(fr_2$pls, "Seeded grass" = "1", 
+                                "Natural or semi-natural grass" = "2",
+                                "Others" = "3")
+fr_2                          
+
+model_spatialCV
+ #Accuracy   Kappa    
+  0.8286146  0.6177224
