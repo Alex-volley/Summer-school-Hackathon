@@ -1,0 +1,86 @@
+##Koelbl Alexandra #code no. 1 # created with R
+library(sp)
+library(raster)
+library(caret)
+library(CAST)
+library(partykit)
+library(latticeExtra)
+library(dplyr)
+library(doParallel)
+
+train_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.train_2000..2020_brazil.eumap_summer.school.2022.csv")
+val_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.val_2000..2020_brazil.eumap_summer.school.2022.csv")
+test_df <- read.csv("C:/Users/alexa/Documents/Open_GeoHub/Hackathon/lcv_pasture_classif.matrix.test_2000..2020_brazil.eumap_summer.school.2022.csv")
+
+train_val_df <- rbind(train_df, val_df) 
+str(train_val_df)
+glimpse(train_df)
+
+#show the data
+library(sf)
+library(tmap)
+tr <- st_as_sf(train_df, coords = c("latitude", "longitude"))
+val <- st_as_sf(val_df, coords = c("latitude", "longitude"))
+te <- st_as_sf(test_df, coords = c("latitude", "longitude"))
+
+tra <- tm_shape(tr) + tm_dots(col ="X", palette = "red") + tm_layout(legend.show = FALSE )
+vali <- tm_shape(val) + tm_dots(col ="X", palette = "blue") + tm_layout(legend.show = FALSE )
+tes <- tm_shape(te) + tm_dots(col ="X", palette = "green") + tm_layout(legend.show = FALSE )
+
+
+
+
+# predictors
+##Basic Model training
+#predictors and response variable
+predictors <- train_df %>% 
+  dplyr::select(-c(X, class, class_pct, class_label)) %>% colnames()
+response <- "class_label" 
+glimpse(train_df) 
+#also include spatial (latitude, longitude) because it is all about numbers, overfitting doesn't matter
+
+#basic cross validation
+ctrl <- trainControl(method="cv", 
+                     number =10, 
+                     savePredictions = TRUE)
+# train the model
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+set.seed(100)
+model <- train(train_val_df[,predictors],
+               train_val_df[,response],
+               method="rf",
+               #  metric="Kappa",
+               trControl=ctrl,
+               importance=TRUE,
+               ntree=250)
+stopCluster(cl)
+model
+plot(varImp(model), top = 10)
+
+# model validation
+# get all cross-validated predictions:
+cvPredictions <- model$pred[model$pred$mtry==model$bestTune$mtry,]
+# calculate Kappa etc:
+confusionMatrix(cvPredictions$pred,cvPredictions$obs)$overall
+
+x <- varImp(model, scale = TRUE)
+rownames(x$importance)
+x <- as.matrix(varImp(model)$importance, scale = TRUE)
+View(x)
+
+
+### predict with test data set
+pls <- predict(model, newdata = test_df)#, type = "prob") 
+fr <- tibble(pls)
+write.csv(fr, file = "/output_predict_prob")
+plot(fr)
+
+View(train_df)
+fr[fr == "Seeded grass"] <- "1"
+fr[fr == "Natural or semi-natural grass"] <- "2"
+fr[fr == "Others"] <- "3"
+
+## fr: "class" predition
+
